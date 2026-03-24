@@ -6,6 +6,8 @@ import Navbar from "../components/Navbar";
 export default function LoginPage() {
   const [username, setUser] = useState("");
   const [password, setPass] = useState("");
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState("");
   const navigate = useNavigate();
 
   useEffect(() => {
@@ -14,13 +16,17 @@ export default function LoginPage() {
 
   const handleLogin = async (e) => {
     e.preventDefault();
+    setLoading(true);
+    setError("");
     try {
       const res = await api.post("login/", { username, password });
       sessionStorage.setItem("access", res.data.access);
       sessionStorage.setItem("refresh", res.data.refresh);
       navigate("/index");
     } catch {
-      alert("Credenciales inválidas o usuario no encontrado.");
+      setError("Credenciales inválidas o usuario no encontrado.");
+    } finally {
+      setLoading(false);
     }
   };
 
@@ -48,10 +54,19 @@ export default function LoginPage() {
               <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1.5">Contraseña</label>
               <input type="password" className={inputCls} placeholder="••••••••" value={password} onChange={e => setPass(e.target.value)} required />
             </div>
-            <button type="submit"
-              className="w-full bg-primary hover:bg-primary-dark dark:bg-primary-light dark:hover:bg-blue-500 text-white py-2.5 rounded-lg font-semibold text-sm transition shadow-sm mt-2">
-              Entrar
+            <button type="submit" disabled={loading}
+              className="w-full bg-primary hover:bg-primary-dark dark:bg-primary-light dark:hover:bg-blue-500 text-white py-2.5 rounded-lg font-semibold text-sm transition shadow-sm mt-2 flex items-center justify-center gap-2 disabled:opacity-70 disabled:cursor-not-allowed">
+              {loading ? (
+                <>
+                  <svg className="w-4 h-4 animate-spin" fill="none" viewBox="0 0 24 24">
+                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"/>
+                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8z"/>
+                  </svg>
+                  Ingresando...
+                </>
+              ) : "Entrar"}
             </button>
+            {error && <p className="text-xs text-red-500 text-center pt-1">{error}</p>}
           </form>
 
           <p className="mt-5 text-center text-sm text-gray-500 dark:text-gray-400">
