@@ -1,0 +1,30 @@
+# Python / Django
+venv/
+.venv/
+*.pyc
+__pycache__/
+*.pyo
+*.pyd
+.Python
+*.egg-info/
+dist/
+build/
+*.sqlite3
+staticfiles/
+
+# Variables de entorno
+.env
+.env.local
+.env.production
+
+# React / Node
+node_modules/
+frontend/dist/
+
+# Editores
+.DS_Store
+.vscode/
+*.swp
+
+# Render / deploy
+*.log
