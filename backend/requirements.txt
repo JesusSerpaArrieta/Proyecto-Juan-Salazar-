@@ -8,3 +8,5 @@ gunicorn==25.1.0
 dj-database-url==2.3.0
 psycopg2-binary==2.9.10
 whitenoise==6.9.0
+cloudinary==1.44.1
+requests==2.32.5

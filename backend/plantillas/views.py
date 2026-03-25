@@ -10,10 +10,10 @@ from django.http import HttpResponse
 from pathlib import Path
 from docxtpl import DocxTemplate
 import os
-import platform
-import subprocess
 import zipfile
 import io
+import requests
+import cloudinary.uploader
 
 from .models import (
     CategoriaPlantilla,
@@ -30,6 +30,17 @@ from .serializers import (
     ArchivoGeneradoSerializer,
 )
 from .utils import *
+
+
+def get_docx_buffer_from_plantilla(plantilla):
+    """Descarga el .docx desde Cloudinary o lo lee desde disco local."""
+    if plantilla.cloudinary_url:
+        r = requests.get(plantilla.cloudinary_url)
+        r.raise_for_status()
+        return io.BytesIO(r.content)
+    # fallback local
+    with open(plantilla.archivo.path, 'rb') as f:
+        return io.BytesIO(f.read())
 
 
 class RegisterSerializer(ModelSerializer):
@@ -94,8 +105,24 @@ class PlantillaUploadView(APIView):
         categoria = get_object_or_404(CategoriaPlantilla, pk=categoria_id)
         plantilla = Plantilla.objects.create(categoria=categoria, nombre=nombre, archivo=archivo)
 
+        # Subir a Cloudinary
         try:
-            vars_set = extract_variables_from_docx(plantilla.archivo.path)
+            archivo.seek(0)
+            result = cloudinary.uploader.upload(
+                archivo,
+                resource_type="raw",
+                folder="sisdoc/plantillas",
+                public_id=f"{categoria.nombre}-{nombre}",
+                overwrite=True,
+            )
+            plantilla.cloudinary_url = result.get("secure_url", "")
+            plantilla.cloudinary_public_id = result.get("public_id", "")
+        except Exception as e:
+            print(f"Error subiendo a Cloudinary: {e}")
+
+        try:
+            buf = get_docx_buffer_from_plantilla(plantilla)
+            vars_set = extract_variables_from_docx_buffer(buf)
             plantilla.variables_detectadas = list(vars_set)
         except Exception:
             plantilla.variables_detectadas = []
@@ -185,7 +212,8 @@ class GenerateCategoryDocumentsAPIView(APIView):
             for p in plantillas:
                 try:
                     docx_buffer = io.BytesIO()
-                    tpl = DocxTemplate(p.archivo.path)
+                    src = get_docx_buffer_from_plantilla(p)
+                    tpl = DocxTemplate(src)
                     tpl.render(datos)
                     tpl.save(docx_buffer)
                     docx_buffer.seek(0)
@@ -221,7 +249,8 @@ class DescargarArchivoAPIView(APIView):
 
         try:
             docx_buffer = io.BytesIO()
-            tpl = DocxTemplate(archivo.plantilla.archivo.path)
+            src = get_docx_buffer_from_plantilla(archivo.plantilla)
+            tpl = DocxTemplate(src)
             tpl.render(datos)
             tpl.save(docx_buffer)
             docx_buffer.seek(0)

@@ -81,6 +81,15 @@ DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 MEDIA_URL = '/media/'
 MEDIA_ROOT = os.path.join(BASE_DIR, 'media')
 
+# Cloudinary
+import cloudinary
+cloudinary.config(
+    cloud_name=os.environ.get('CLOUDINARY_CLOUD_NAME', 'dnz2qadcq'),
+    api_key=os.environ.get('CLOUDINARY_API_KEY', '933624569384512'),
+    api_secret=os.environ.get('CLOUDINARY_API_SECRET', '_s57zuvQKr4gkqyjQqIhagZ8B_8'),
+    secure=True,
+)
+
 # CORS — en producción se restringe por variable de entorno
 CORS_ALLOWED_ORIGINS = os.environ.get(
     'CORS_ALLOWED_ORIGINS',

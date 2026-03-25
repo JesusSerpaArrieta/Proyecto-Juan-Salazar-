@@ -29,6 +29,14 @@ def extract_variables_from_docx(path):
         return set()
 
 
+def extract_variables_from_docx_buffer(buf):
+    tpl = DocxTemplate(buf)
+    try:
+        return set(tpl.get_undeclared_template_variables())
+    except Exception:
+        return set()
+
+
 def render_docx_from_template(template_path, context, out_path):
     tpl = DocxTemplate(template_path)
     tpl.render(context)

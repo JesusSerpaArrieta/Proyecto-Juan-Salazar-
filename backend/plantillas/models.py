@@ -14,7 +14,9 @@ class CategoriaPlantilla(models.Model):
 class Plantilla(models.Model):
     categoria = models.ForeignKey(CategoriaPlantilla, on_delete=models.CASCADE, related_name='plantillas')
     nombre = models.CharField(max_length=150)
-    archivo = models.FileField(upload_to='plantillas/')
+    archivo = models.FileField(upload_to='plantillas/', blank=True)
+    cloudinary_url = models.URLField(blank=True, default='')
+    cloudinary_public_id = models.CharField(max_length=255, blank=True, default='')
     variables_detectadas = models.JSONField(default=list, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
 
