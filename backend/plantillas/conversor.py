@@ -1,59 +1,106 @@
-"""Lógica del conversor inteligente de .docx a plantilla docxtpl."""
+"""
+Conversor inteligente de documentos Word a plantillas docxtpl.
+Entrenado con los documentos reales de la Alcaldía de Sampués.
+"""
 import re
 import io
 from docx import Document
 
+# ── Datos fijos de la alcaldía ─────────────────────────────────────────────
 FIJOS = {
+    # Municipio y departamento
+    "SAMPUÉS – SUCRE": "{{municipio}} – {{departamento}}",
+    "SAMPUES –SUCRE": "{{municipio}} –{{departamento}}",
+    "SAMPUÉS-SUCRE": "{{municipio}}-{{departamento}}",
+    "Sampués-Sucre": "{{municipio}}-{{departamento}}",
+    "Sampués - Sucre": "{{municipio}} - {{departamento}}",
     "SAMPUÉS": "{{municipio}}", "Sampués": "{{municipio}}",
     "SAMPUES": "{{municipio}}", "Sampues": "{{municipio}}",
     "SUCRE": "{{departamento}}", "Sucre": "{{departamento}}",
+
+    # Funcionarios
     "CARLOS HUGO MONTOYA ARIAS": "{{nombre_secretario}}",
+    "KAROL LAMBRAÑO BUSTAMANTE": "{{nombre_secretario}}",
     "Milta Lambraño Pérez": "{{nombre_elaboro}}",
     "Iván Flórez": "{{nombre_juridico}}",
+    "Profesional Universitaria de planeación con funciones asignadas": "{{cargo_secretario}}",
+    "Secretaria de Planeación e Infraestructura -Resolución 129-2025": "{{resolucion_cargo}}",
+    "Secretario de Planeación e Infraestructura.": "{{cargo_secretario}}",
+    "Apoyo a la secretaria de Planeación e infraestructura": "{{cargo_elaboro}}",
+    "Profesional de apoyo a la secretaria de planeación": "{{cargo_elaboro}}",
+    "Profesional de apoyo a la secretaria de  planeación": "{{cargo_elaboro}}",
+    "Asesor Jurídico": "{{cargo_juridico}}",
+    "Asesor Jurídica Externo": "{{cargo_juridico}}",
+
+    # Contacto
     "secretariadeplaneacion@sampues-sucre.gov.co": "{{correo_secretaria}}",
     "www.sampues-sucre.gov.co": "{{web_alcaldia}}",
     "283 01 71": "{{telefono_secretaria}}",
     "calle 23 # 19 B-22sector centro": "{{direccion_secretaria}}",
     "705070": "{{codigo_postal}}",
+
+    # Vecinos hardcodeados del auto-cons (datos de ejemplo que no deben quedar)
+    "GUSTAVO CARO MERCADO": "{{vecino_1_nombre}}",
+    "GLENDA POLO VILLALBA": "{{vecino_2_nombre}}",
+    "ANA JULIETA GARCIA ARROYO": "{{vecino_3_nombre}}",
+    "C 23C 12 120 LO N°5": "{{vecino_1_direccion}}",
+    "C 23C 12 120 LO N° 7": "{{vecino_2_direccion}}",
+    "C 23C 13 120 MZ 2 L 5": "{{vecino_3_direccion}}",
+    "706700100000001510061000000000": "{{vecino_1_catastro}}",
+    "706700100000001510063000000000": "{{vecino_2_catastro}}",
+    "706700100000001510033000000000": "{{vecino_3_catastro}}",
+    "Barrio el Carmelo": "{{vecino_barrio}}",
 }
 
-# Patrones de fecha con contexto — (patron_contexto, patron_fecha, variable)
-# El contexto es texto que aparece ANTES de la fecha en la misma frase
-FECHAS_CON_CONTEXTO = [
+# ── Patrones con contexto (párrafo completo) → variable específica ─────────
+# (palabras_clave_en_parrafo, patron_fecha, variable_resultado)
+FECHAS_CONTEXTO = [
     # Vencimiento
-    (r'[Vv]enc\w*|[Ee]xpira\w*|[Hh]asta el|[Vv]igente hasta',        r'\b\d{1,2}\s+de\s+\w+\s+de\s+\d{4}\b', 'fecha_vencimiento'),
-    (r'[Vv]enc\w*|[Ee]xpira\w*',                                       r'\b\w+\s+\d{1,2}\s+de\s+\d{4}\b',       'fecha_vencimiento'),
+    (['vencimiento', 'vence', 'expira', 'vigente hasta'],
+     r'\b\d{1,2}\s+de\s+\w+\s+de\s+\d{4}\b', 'fecha_vencimiento'),
+    (['vencimiento', 'vence'],
+     r'\b\w+\s+\d{1,2}\s+de\s+\d{4}\b', 'fecha_vencimiento'),
+
     # Radicación
-    (r'[Rr]adic\w*|[Rr]ecib\w*|[Pp]resentó|[Ss]e recibió',           r'\b\d{1,2}\s+de\s+\w+\s+de\s+\d{4}\b', 'fecha_radicacion'),
+    (['radicó', 'radicacion', 'radicación', 'se recibió', 'recibió oficio', 'se presentó'],
+     r'\b\d{1,2}\s+de\s+\w+\s+de\s+\d{4}\b', 'fecha_radicacion'),
+
     # Notificación
-    (r'[Nn]otific\w*|[Nn]otifiqué',                                    r'\b\d{1,2}\s+de\s+\w+\s+de\s+\d{4}\b', 'fecha_notificacion'),
-    # Expedición / firma
-    (r'[Ee]xpid\w*|[Ff]irm\w*|[Ee]xpedición|[Ff]echa de',            r'\b\d{1,2}\s+de\s+\w+\s+de\s+\d{4}\b', 'fecha_expedicion'),
-    (r'[Ee]xpid\w*|[Ff]irm\w*',                                       r'\b\w+\s+\d{1,2}\s+de\s+\d{4}\b',       'fecha_expedicion'),
+    (['notifique', 'notificación', 'notificacion', 'notifiqué'],
+     r'\b\d{1,2}\s+de\s+\w+\s+de\s+\d{4}\b', 'fecha_notificacion'),
+
+    # Expedición (fallback)
+    (['expedición', 'expedicion', 'expide', 'expidió', 'expedición:'],
+     r'\b\d{1,2}\s+de\s+\w+\s+de\s+\d{4}\b', 'fecha_expedicion'),
+    (['expedición', 'expedicion'],
+     r'\b\w+\s+\d{1,2}\s+de\s+\d{4}\b', 'fecha_expedicion'),
 ]
 
-# Patrones sin contexto — se aplican al texto del run solo
+# ── Patrones regex generales (run a run) ──────────────────────────────────
 PATRONES = [
     # Radicado municipal (ej: 70670-0-25-0127)
-    (r'\b\d{5}-\d{1,2}-\d{2,4}-\d{3,6}\b',                           'radicado'),
-    # Número de resolución
-    (r'N[°oº\.]\s*\d{1,4}\b',                                         'numero_resolucion'),
-    # Cédula
-    (r'\b\d{2}[\.\s]?\d{3}[\.\s]?\d{3}\b',                           'cedula_solicitante'),
-    # Matrícula inmobiliaria
-    (r'\b\d{3}-\d{4,6}\b',                                            'matricula_inmobiliaria'),
+    (r'\b\d{5}-\d{1,2}-\d{2,4}-\d{3,6}\b',          'radicado'),
+    # Número de resolución (ej: N° 113, No. 5)
+    (r'N[°oº\.]\s*\d{1,4}\b',                         'numero_resolucion'),
+    # Cédula (ej: 64.544.148 o 1.234.567)
+    (r'\b\d{1,2}[\.\s]?\d{3}[\.\s]?\d{3}\b',         'cedula_solicitante'),
+    # Matrícula inmobiliaria (ej: 340-88957)
+    (r'\b\d{3}-\d{4,6}\b',                            'matricula_inmobiliaria'),
     # Código catastral (16+ dígitos)
-    (r'\b\d{16,30}\b',                                                 'codigo_catastral'),
-    # Fechas escritas — genérico (fallback si no hay contexto)
-    (r'\b\d{1,2}\s+de\s+\w+\s+de\s+\d{4}\b',                        'fecha_expedicion'),
-    (r'\b\w+\s+\d{1,2}\s+de\s+\d{4}\b',                              'fecha_expedicion'),
-    # Año en contexto
-    (r'\bDEL\s+20\d{2}\b',                                            'anio_resolucion'),
-    # Matrícula profesional
-    (r'\b\d{2,6}-\d{4,6}\s*C\.?P\.?[A-Z\.]*\b',                     'matricula_prof'),
-    # Áreas
-    (r'\d+\s*HAS\s*\+?\s*[\d\.,]*\s*M2?',                            'area_total_predio'),
-    (r'\d+\s*HAS\b',                                                   'area_lote'),
+    (r'\b\d{16,30}\b',                                 'codigo_catastral'),
+    # Escritura notarial (ej: Escritura No. 1.184)
+    (r'[Ee]scritura\s+N[o°\.]+\s*[\d\.]+',            'escritura_predio'),
+    # Matrícula profesional (ej: 03-21455 C.P.N.I)
+    (r'\b\d{2,6}-\d{4,6}\s*C\.?P\.?[A-Z\.]*\b',      'matricula_prof'),
+    # Áreas en hectáreas con m2 (ej: 14 HAS + 5.000,00 M2)
+    (r'\d+\s*HAS\s*\+\s*[\d\.,]+\s*M2?',             'area_total_predio'),
+    # Áreas solo en hectáreas (ej: 5 HAS)
+    (r'\b\d+\s*HAS\b',                                'area_lote'),
+    # Fechas escritas — fallback genérico
+    (r'\b\d{1,2}\s+de\s+\w+\s+de\s+\d{4}\b',        'fecha_expedicion'),
+    (r'\b\w+\s+\d{1,2}\s+de\s+\d{4}\b',              'fecha_expedicion'),
+    # Año en contexto (ej: DEL 2025)
+    (r'\bDEL\s+20\d{2}\b',                            'anio_resolucion'),
 ]
 
 def _nombre_unico(base, contadores):
@@ -61,53 +108,50 @@ def _nombre_unico(base, contadores):
     sufijo = f"_{contadores[base]}" if contadores[base] > 1 else ""
     return base + sufijo
 
-def aplicar_patrones_con_contexto(parrafo_texto, contadores):
-    """Aplica detección de fechas usando contexto del párrafo completo."""
-    resultado = parrafo_texto
-    for ctx_patron, fecha_patron, variable in FECHAS_CON_CONTEXTO:
-        # Buscar si hay contexto en el párrafo
-        if re.search(ctx_patron, parrafo_texto):
-            def reemplazar_fecha(m, var=variable):
-                matched = m.group(0)
-                if '{{' in matched:
-                    return matched
-                return '{{' + _nombre_unico(var, contadores) + '}}'
-            resultado = re.sub(fecha_patron, reemplazar_fecha, resultado)
-    return resultado
+def _texto_parrafo(parrafo):
+    return ''.join(r.text for r in parrafo.runs)
 
-def aplicar_patrones(texto, contadores):
-    """Aplica fijos y patrones regex al texto de un run."""
+def _detectar_variable_fecha(texto_parrafo, patron_fecha, contadores):
+    """Detecta qué tipo de fecha es según el contexto del párrafo."""
+    texto_lower = texto_parrafo.lower()
+    for palabras, patron, variable in FECHAS_CONTEXTO:
+        if any(p in texto_lower for p in palabras):
+            if re.search(patron, texto_parrafo):
+                return variable
+    return None  # sin contexto claro → usar fallback
+
+def aplicar_fijos(texto):
     for original, variable in FIJOS.items():
         texto = texto.replace(original, variable)
+    return texto
+
+def aplicar_patrones_run(texto, contadores, variable_fecha_override=None):
+    """Aplica patrones regex al texto de un run."""
     for patron, nombre_base in PATRONES:
-        def reemplazar(m, nb=nombre_base):
+        es_fecha = 'fecha' in nombre_base
+        def reemplazar(m, nb=nombre_base, es_f=es_fecha, override=variable_fecha_override):
             matched = m.group(0)
             if '{{' in matched:
                 return matched
-            return '{{' + _nombre_unico(nb, contadores) + '}}'
+            var = override if (es_f and override) else nb
+            return '{{' + _nombre_unico(var, contadores) + '}}'
         texto = re.sub(patron, reemplazar, texto)
     return texto
-
-def _texto_parrafo(parrafo):
-    return ''.join(r.text for r in parrafo.runs)
 
 def procesar_parrafo(parrafo, contadores):
     texto_completo = _texto_parrafo(parrafo)
     if not texto_completo.strip():
         return
 
-    # Primero aplicar contexto al texto completo del párrafo
-    texto_con_ctx = aplicar_patrones_con_contexto(texto_completo, dict(contadores))
+    # Detectar tipo de fecha por contexto del párrafo completo
+    variable_fecha = _detectar_variable_fecha(texto_completo, None, {})
 
-    # Si hubo cambios por contexto, actualizar contadores y aplicar run a run
-    if texto_con_ctx != texto_completo:
-        # Recalcular contadores con el contexto
-        aplicar_patrones_con_contexto(texto_completo, contadores)
-
-    # Aplicar run a run (fijos + patrones sin contexto)
     for run in parrafo.runs:
-        if run.text.strip():
-            run.text = aplicar_patrones(run.text, contadores)
+        if not run.text.strip():
+            continue
+        texto = aplicar_fijos(run.text)
+        texto = aplicar_patrones_run(texto, contadores, variable_fecha_override=variable_fecha)
+        run.text = texto
 
 def convertir_a_plantilla(input_buffer):
     """Recibe un BytesIO con el .docx y devuelve un BytesIO con la plantilla."""
