@@ -1,4 +1,6 @@
-from rest_framework import viewsets, status, generics
+from django.views.generic import TemplateView
+from django.http import HttpResponse as DjangoHttpResponse
+from .conversor import convertir_a_plantilla
 from rest_framework.views import APIView
 from rest_framework.parsers import MultiPartParser, FormParser, JSONParser
 from rest_framework.response import Response
@@ -340,3 +342,147 @@ class ArchivosPorPlantillaAPIView(generics.ListAPIView):
     def get_queryset(self):
         plantilla_id = self.kwargs.get("plantilla_id")
         return ArchivoGenerado.objects.filter(plantilla_id=plantilla_id)
+
+
+class ConversorPlantillaView(APIView):
+    permission_classes = []  # acceso libre — es una herramienta interna
+    parser_classes = (MultiPartParser, FormParser)
+
+    def get(self, request):
+        html = """<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Conversor de Plantillas — SisDoc</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: 'Segoe UI', sans-serif; background: #0F172A; color: #E5E7EB; min-height: 100vh; display: flex; align-items: center; justify-content: center; padding: 24px; }
+  .card { background: #1E293B; border: 1px solid #334155; border-radius: 16px; padding: 40px; width: 100%; max-width: 520px; box-shadow: 0 20px 60px rgba(0,0,0,0.4); }
+  .logo { display: flex; align-items: center; gap: 12px; margin-bottom: 28px; }
+  .logo-icon { width: 44px; height: 44px; background: #1E3A8A; border-radius: 10px; display: flex; align-items: center; justify-content: center; font-weight: 800; font-size: 18px; color: white; }
+  h1 { font-size: 20px; font-weight: 700; color: #F1F5F9; }
+  p.sub { font-size: 13px; color: #94A3B8; margin-top: 2px; }
+  .drop-zone { border: 2px dashed #334155; border-radius: 12px; padding: 40px 20px; text-align: center; cursor: pointer; transition: all 0.2s; margin: 24px 0; position: relative; }
+  .drop-zone:hover, .drop-zone.over { border-color: #3B82F6; background: rgba(59,130,246,0.05); }
+  .drop-zone input { position: absolute; inset: 0; opacity: 0; cursor: pointer; width: 100%; height: 100%; }
+  .drop-icon { font-size: 36px; margin-bottom: 10px; }
+  .drop-zone p { font-size: 14px; color: #94A3B8; }
+  .drop-zone .filename { font-size: 13px; color: #3B82F6; margin-top: 8px; font-weight: 600; }
+  button { width: 100%; padding: 13px; background: #1E3A8A; color: white; border: none; border-radius: 10px; font-size: 15px; font-weight: 600; cursor: pointer; transition: background 0.2s; }
+  button:hover { background: #2563EB; }
+  button:disabled { background: #334155; color: #64748B; cursor: not-allowed; }
+  .result { margin-top: 20px; padding: 16px; background: #0F172A; border-radius: 10px; border: 1px solid #1E3A8A; display: none; }
+  .result p { font-size: 13px; color: #94A3B8; margin-bottom: 8px; }
+  .vars { display: flex; flex-wrap: wrap; gap: 6px; }
+  .var-tag { background: #1E3A8A; color: #93C5FD; font-size: 11px; padding: 3px 8px; border-radius: 20px; font-family: monospace; }
+  .success { color: #4ADE80; font-weight: 600; font-size: 14px; margin-bottom: 8px; }
+  .error-msg { color: #F87171; font-size: 13px; margin-top: 12px; display: none; }
+</style>
+</head>
+<body>
+<div class="card">
+  <div class="logo">
+    <div class="logo-icon">S</div>
+    <div>
+      <h1>Conversor de Plantillas</h1>
+      <p class="sub">SisDoc — Alcaldía Municipal</p>
+    </div>
+  </div>
+  <p style="font-size:14px;color:#94A3B8;line-height:1.6;">
+    Sube un documento Word con datos reales y lo convertimos automáticamente en una plantilla con variables <code style="color:#3B82F6">{{variable}}</code> lista para usar en SisDoc.
+  </p>
+  <div class="drop-zone" id="dropZone">
+    <input type="file" id="fileInput" accept=".docx" />
+    <div class="drop-icon">📄</div>
+    <p>Arrastra tu <strong>.docx</strong> aquí o haz clic para seleccionar</p>
+    <div class="filename" id="fileName"></div>
+  </div>
+  <button id="btnConvertir" disabled onclick="convertir()">Convertir a plantilla</button>
+  <div class="error-msg" id="errorMsg"></div>
+  <div class="result" id="result">
+    <p class="success">✅ Plantilla generada correctamente</p>
+    <p>Variables detectadas:</p>
+    <div class="vars" id="varsList"></div>
+  </div>
+</div>
+<script>
+  const input = document.getElementById('fileInput');
+  const btn = document.getElementById('btnConvertir');
+  const fileName = document.getElementById('fileName');
+  const dropZone = document.getElementById('dropZone');
+
+  input.addEventListener('change', () => {
+    if (input.files[0]) {
+      fileName.textContent = input.files[0].name;
+      btn.disabled = false;
+    }
+  });
+  dropZone.addEventListener('dragover', e => { e.preventDefault(); dropZone.classList.add('over'); });
+  dropZone.addEventListener('dragleave', () => dropZone.classList.remove('over'));
+  dropZone.addEventListener('drop', e => {
+    e.preventDefault(); dropZone.classList.remove('over');
+    input.files = e.dataTransfer.files;
+    if (input.files[0]) { fileName.textContent = input.files[0].name; btn.disabled = false; }
+  });
+
+  async function convertir() {
+    const file = input.files[0];
+    if (!file) return;
+    btn.disabled = true; btn.textContent = 'Procesando...';
+    document.getElementById('errorMsg').style.display = 'none';
+    document.getElementById('result').style.display = 'none';
+
+    const form = new FormData();
+    form.append('archivo', file);
+
+    try {
+      const res = await fetch('/conversor/', { method: 'POST', body: form });
+      if (!res.ok) { throw new Error(await res.text()); }
+      const blob = await res.blob();
+      const vars = res.headers.get('X-Variables') || '';
+
+      // Descargar
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = file.name.replace('.docx', '-plantilla.docx');
+      a.click(); URL.revokeObjectURL(url);
+
+      // Mostrar variables
+      const lista = document.getElementById('varsList');
+      lista.innerHTML = '';
+      vars.split(',').filter(Boolean).forEach(v => {
+        const tag = document.createElement('span');
+        tag.className = 'var-tag'; tag.textContent = '{{' + v + '}}';
+        lista.appendChild(tag);
+      });
+      document.getElementById('result').style.display = 'block';
+    } catch(e) {
+      document.getElementById('errorMsg').textContent = 'Error: ' + e.message;
+      document.getElementById('errorMsg').style.display = 'block';
+    }
+    btn.disabled = false; btn.textContent = 'Convertir a plantilla';
+  }
+</script>
+</body>
+</html>"""
+        return DjangoHttpResponse(html, content_type='text/html')
+
+    def post(self, request):
+        archivo = request.FILES.get('archivo')
+        if not archivo:
+            return DjangoHttpResponse('Archivo requerido', status=400)
+        try:
+            buf = io.BytesIO(archivo.read())
+            resultado, variables = convertir_a_plantilla(buf)
+            nombre = archivo.name.replace('.docx', '-plantilla.docx')
+            response = DjangoHttpResponse(
+                resultado.read(),
+                content_type='application/vnd.openxmlformats-officedocument.wordprocessingml.document'
+            )
+            response['Content-Disposition'] = f'attachment; filename="{nombre}"'
+            response['X-Variables'] = ','.join(variables)
+            return response
+        except Exception as e:
+            return DjangoHttpResponse(str(e), status=500)
