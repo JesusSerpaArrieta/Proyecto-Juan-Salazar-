@@ -25,9 +25,11 @@ export default function Navbar() {
 
         {/* Logo + nombre */}
         <div className="flex items-center gap-3 min-w-0">
-          <div className="w-9 h-9 rounded-full bg-white/20 flex items-center justify-center font-bold text-white text-base shrink-0">
-            S
-          </div>
+          <img
+            src="https://pbs.twimg.com/profile_images/691661000597200897/nOj5fUnN.jpg"
+            alt="Escudo Alcaldía de Sampués"
+            className="w-9 h-9 rounded-full object-cover shrink-0"
+          />
           <div className="min-w-0">
             <Link to="/index">
               <p className="font-bold text-white text-sm sm:text-base leading-tight hover:text-blue-200 transition truncate">
