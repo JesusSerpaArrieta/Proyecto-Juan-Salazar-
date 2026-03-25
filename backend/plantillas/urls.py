@@ -20,5 +20,6 @@ urlpatterns = [
     path('documento/<int:pk>/editar/', EditarDocumentoAPIView.as_view(), name='editar-documento'),
     path('categorias/<int:categoria_id>/plantillas/', PlantillasPorCategoriaAPIView.as_view(), name='plantillas-por-categoria'),
     path('plantillas/<int:plantilla_id>/archivos/', ArchivosPorPlantillaAPIView.as_view(), name='archivos-por-plantilla'),
-    path('conversor/', ConversorPlantillaView.as_view(), name='conversor'),
+    path('conversor/analizar/', ConversorAnalizarView.as_view(), name='conversor-analizar'),
+    path('conversor/generar/', ConversorGenerarView.as_view(), name='conversor-generar'),
 ]

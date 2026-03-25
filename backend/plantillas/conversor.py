@@ -1,173 +1,131 @@
 """
-Conversor inteligente de documentos Word a plantillas docxtpl.
-Entrenado con los documentos reales de la Alcaldía de Sampués.
+Conversor interactivo de documentos Word a plantillas docxtpl.
+Flujo: analizar (extrae segmentos) → generar (aplica mapeo y produce plantilla).
 """
 import re
 import io
+import json
 from docx import Document
+from docx.oxml.ns import qn
+from copy import deepcopy
 
-# ── Datos fijos de la alcaldía ─────────────────────────────────────────────
-FIJOS = {
-    # Municipio y departamento
-    "SAMPUÉS – SUCRE": "{{municipio}} – {{departamento}}",
-    "SAMPUES –SUCRE": "{{municipio}} –{{departamento}}",
-    "SAMPUÉS-SUCRE": "{{municipio}}-{{departamento}}",
-    "Sampués-Sucre": "{{municipio}}-{{departamento}}",
-    "Sampués - Sucre": "{{municipio}} - {{departamento}}",
-    "SAMPUÉS": "{{municipio}}", "Sampués": "{{municipio}}",
-    "SAMPUES": "{{municipio}}", "Sampues": "{{municipio}}",
-    "SUCRE": "{{departamento}}", "Sucre": "{{departamento}}",
 
-    # Funcionarios
-    "CARLOS HUGO MONTOYA ARIAS": "{{nombre_secretario}}",
-    "KAROL LAMBRAÑO BUSTAMANTE": "{{nombre_secretario}}",
-    "Milta Lambraño Pérez": "{{nombre_elaboro}}",
-    "Iván Flórez": "{{nombre_juridico}}",
-    "Profesional Universitaria de planeación con funciones asignadas": "{{cargo_secretario}}",
-    "Secretaria de Planeación e Infraestructura -Resolución 129-2025": "{{resolucion_cargo}}",
-    "Secretario de Planeación e Infraestructura.": "{{cargo_secretario}}",
-    "Apoyo a la secretaria de Planeación e infraestructura": "{{cargo_elaboro}}",
-    "Profesional de apoyo a la secretaria de planeación": "{{cargo_elaboro}}",
-    "Profesional de apoyo a la secretaria de  planeación": "{{cargo_elaboro}}",
-    "Asesor Jurídico": "{{cargo_juridico}}",
-    "Asesor Jurídica Externo": "{{cargo_juridico}}",
+# ─── Análisis: extrae segmentos únicos de texto del documento ────────────────
 
-    # Contacto
-    "secretariadeplaneacion@sampues-sucre.gov.co": "{{correo_secretaria}}",
-    "www.sampues-sucre.gov.co": "{{web_alcaldia}}",
-    "283 01 71": "{{telefono_secretaria}}",
-    "calle 23 # 19 B-22sector centro": "{{direccion_secretaria}}",
-    "705070": "{{codigo_postal}}",
+def _runs_de_parrafo(parrafo):
+    """Devuelve lista de (run_index, texto) para runs con texto real."""
+    return [(i, r.text) for i, r in enumerate(parrafo.runs) if r.text.strip()]
 
-    # Vecinos hardcodeados del auto-cons (datos de ejemplo que no deben quedar)
-    "GUSTAVO CARO MERCADO": "{{vecino_1_nombre}}",
-    "GLENDA POLO VILLALBA": "{{vecino_2_nombre}}",
-    "ANA JULIETA GARCIA ARROYO": "{{vecino_3_nombre}}",
-    "C 23C 12 120 LO N°5": "{{vecino_1_direccion}}",
-    "C 23C 12 120 LO N° 7": "{{vecino_2_direccion}}",
-    "C 23C 13 120 MZ 2 L 5": "{{vecino_3_direccion}}",
-    "706700100000001510061000000000": "{{vecino_1_catastro}}",
-    "706700100000001510063000000000": "{{vecino_2_catastro}}",
-    "706700100000001510033000000000": "{{vecino_3_catastro}}",
-    "Barrio el Carmelo": "{{vecino_barrio}}",
-}
 
-# ── Patrones con contexto (párrafo completo) → variable específica ─────────
-# (palabras_clave_en_parrafo, patron_fecha, variable_resultado)
-FECHAS_CONTEXTO = [
-    # Vencimiento
-    (['vencimiento', 'vence', 'expira', 'vigente hasta'],
-     r'\b\d{1,2}\s+de\s+\w+\s+de\s+\d{4}\b', 'fecha_vencimiento'),
-    (['vencimiento', 'vence'],
-     r'\b\w+\s+\d{1,2}\s+de\s+\d{4}\b', 'fecha_vencimiento'),
-
-    # Radicación
-    (['radicó', 'radicacion', 'radicación', 'se recibió', 'recibió oficio', 'se presentó'],
-     r'\b\d{1,2}\s+de\s+\w+\s+de\s+\d{4}\b', 'fecha_radicacion'),
-
-    # Notificación
-    (['notifique', 'notificación', 'notificacion', 'notifiqué'],
-     r'\b\d{1,2}\s+de\s+\w+\s+de\s+\d{4}\b', 'fecha_notificacion'),
-
-    # Expedición (fallback)
-    (['expedición', 'expedicion', 'expide', 'expidió', 'expedición:'],
-     r'\b\d{1,2}\s+de\s+\w+\s+de\s+\d{4}\b', 'fecha_expedicion'),
-    (['expedición', 'expedicion'],
-     r'\b\w+\s+\d{1,2}\s+de\s+\d{4}\b', 'fecha_expedicion'),
-]
-
-# ── Patrones regex generales (run a run) ──────────────────────────────────
-PATRONES = [
-    # Radicado municipal (ej: 70670-0-25-0127)
-    (r'\b\d{5}-\d{1,2}-\d{2,4}-\d{3,6}\b',          'radicado'),
-    # Número de resolución (ej: N° 113, No. 5)
-    (r'N[°oº\.]\s*\d{1,4}\b',                         'numero_resolucion'),
-    # Cédula (ej: 64.544.148 o 1.234.567)
-    (r'\b\d{1,2}[\.\s]?\d{3}[\.\s]?\d{3}\b',         'cedula_solicitante'),
-    # Matrícula inmobiliaria (ej: 340-88957)
-    (r'\b\d{3}-\d{4,6}\b',                            'matricula_inmobiliaria'),
-    # Código catastral (16+ dígitos)
-    (r'\b\d{16,30}\b',                                 'codigo_catastral'),
-    # Escritura notarial (ej: Escritura No. 1.184)
-    (r'[Ee]scritura\s+N[o°\.]+\s*[\d\.]+',            'escritura_predio'),
-    # Matrícula profesional (ej: 03-21455 C.P.N.I)
-    (r'\b\d{2,6}-\d{4,6}\s*C\.?P\.?[A-Z\.]*\b',      'matricula_prof'),
-    # Áreas en hectáreas con m2 (ej: 14 HAS + 5.000,00 M2)
-    (r'\d+\s*HAS\s*\+\s*[\d\.,]+\s*M2?',             'area_total_predio'),
-    # Áreas solo en hectáreas (ej: 5 HAS)
-    (r'\b\d+\s*HAS\b',                                'area_lote'),
-    # Fechas escritas — fallback genérico
-    (r'\b\d{1,2}\s+de\s+\w+\s+de\s+\d{4}\b',        'fecha_expedicion'),
-    (r'\b\w+\s+\d{1,2}\s+de\s+\d{4}\b',              'fecha_expedicion'),
-    # Año en contexto (ej: DEL 2025)
-    (r'\bDEL\s+20\d{2}\b',                            'anio_resolucion'),
-]
-
-def _nombre_unico(base, contadores):
-    contadores[base] = contadores.get(base, 0) + 1
-    sufijo = f"_{contadores[base]}" if contadores[base] > 1 else ""
-    return base + sufijo
-
-def _texto_parrafo(parrafo):
-    return ''.join(r.text for r in parrafo.runs)
-
-def _detectar_variable_fecha(texto_parrafo, patron_fecha, contadores):
-    """Detecta qué tipo de fecha es según el contexto del párrafo."""
-    texto_lower = texto_parrafo.lower()
-    for palabras, patron, variable in FECHAS_CONTEXTO:
-        if any(p in texto_lower for p in palabras):
-            if re.search(patron, texto_parrafo):
-                return variable
-    return None  # sin contexto claro → usar fallback
-
-def aplicar_fijos(texto):
-    for original, variable in FIJOS.items():
-        texto = texto.replace(original, variable)
-    return texto
-
-def aplicar_patrones_run(texto, contadores, variable_fecha_override=None):
-    """Aplica patrones regex al texto de un run."""
-    for patron, nombre_base in PATRONES:
-        es_fecha = 'fecha' in nombre_base
-        def reemplazar(m, nb=nombre_base, es_f=es_fecha, override=variable_fecha_override):
-            matched = m.group(0)
-            if '{{' in matched:
-                return matched
-            var = override if (es_f and override) else nb
-            return '{{' + _nombre_unico(var, contadores) + '}}'
-        texto = re.sub(patron, reemplazar, texto)
-    return texto
-
-def procesar_parrafo(parrafo, contadores):
-    texto_completo = _texto_parrafo(parrafo)
+def _segmentos_de_parrafo(parrafo, parrafo_idx, origen):
+    """Extrae segmentos de texto de un párrafo con su ubicación."""
+    segmentos = []
+    texto_completo = "".join(r.text for r in parrafo.runs)
     if not texto_completo.strip():
-        return
+        return segmentos
 
-    # Detectar tipo de fecha por contexto del párrafo completo
-    variable_fecha = _detectar_variable_fecha(texto_completo, None, {})
+    # Dividir en tokens por espacios/puntuación para granularidad
+    # Pero devolver el párrafo completo como un segmento editable
+    segmentos.append({
+        "id": f"{origen}-p{parrafo_idx}",
+        "texto": texto_completo,
+        "origen": origen,
+        "parrafo_idx": parrafo_idx,
+        "celda_idx": None,
+        "fila_idx": None,
+        "tabla_idx": None,
+    })
+    return segmentos
 
-    for run in parrafo.runs:
-        if not run.text.strip():
-            continue
-        texto = aplicar_fijos(run.text)
-        texto = aplicar_patrones_run(texto, contadores, variable_fecha_override=variable_fecha)
-        run.text = texto
 
-def convertir_a_plantilla(input_buffer):
-    """Recibe un BytesIO con el .docx y devuelve un BytesIO con la plantilla."""
+def analizar_documento(input_buffer):
+    """
+    Parsea el .docx y devuelve una lista de segmentos de texto con su ubicación.
+    Cada segmento tiene: id, texto, origen (body/tabla), índices de posición.
+    """
     doc = Document(input_buffer)
-    contadores = {}
+    segmentos = []
+
+    # Párrafos del cuerpo
+    for i, parrafo in enumerate(doc.paragraphs):
+        segs = _segmentos_de_parrafo(parrafo, i, "body")
+        segmentos.extend(segs)
+
+    # Celdas de tablas
+    for t_idx, tabla in enumerate(doc.tables):
+        for f_idx, fila in enumerate(tabla.rows):
+            for c_idx, celda in enumerate(fila.cells):
+                for p_idx, parrafo in enumerate(celda.paragraphs):
+                    texto_completo = "".join(r.text for r in parrafo.runs)
+                    if not texto_completo.strip():
+                        continue
+                    segmentos.append({
+                        "id": f"tabla{t_idx}-f{f_idx}-c{c_idx}-p{p_idx}",
+                        "texto": texto_completo,
+                        "origen": "tabla",
+                        "parrafo_idx": p_idx,
+                        "celda_idx": c_idx,
+                        "fila_idx": f_idx,
+                        "tabla_idx": t_idx,
+                    })
+
+    # Eliminar duplicados exactos de texto (mismo texto en múltiples lugares)
+    # pero conservar todos para el mapeo correcto
+    return segmentos
+
+
+# ─── Generación: aplica el mapeo texto→variable al documento ─────────────────
+
+def _reemplazar_en_run(run_text, mapeo):
+    """
+    Reemplaza ocurrencias de textos mapeados en el texto de un run.
+    mapeo: {texto_original: nombre_variable}
+    """
+    resultado = run_text
+    # Ordenar por longitud descendente para evitar reemplazos parciales
+    for original, variable in sorted(mapeo.items(), key=lambda x: -len(x[0])):
+        if original in resultado:
+            resultado = resultado.replace(original, "{{" + variable + "}}")
+    return resultado
+
+
+def _procesar_parrafo_con_mapeo(parrafo, mapeo):
+    """Aplica el mapeo a todos los runs de un párrafo."""
+    for run in parrafo.runs:
+        if run.text:
+            run.text = _reemplazar_en_run(run.text, mapeo)
+
+
+def generar_plantilla(input_buffer, mapeo):
+    """
+    Recibe el .docx original y un mapeo {texto_original: nombre_variable}.
+    Devuelve un BytesIO con el .docx plantilla y la lista de variables usadas.
+    """
+    doc = Document(input_buffer)
 
     for parrafo in doc.paragraphs:
-        procesar_parrafo(parrafo, contadores)
+        _procesar_parrafo_con_mapeo(parrafo, mapeo)
 
     for tabla in doc.tables:
         for fila in tabla.rows:
             for celda in fila.cells:
                 for parrafo in celda.paragraphs:
-                    procesar_parrafo(parrafo, contadores)
+                    _procesar_parrafo_con_mapeo(parrafo, mapeo)
+
+    # Recolectar variables insertadas
+    patron_var = re.compile(r'\{\{(\w+)\}\}')
+    variables = set()
+    for parrafo in doc.paragraphs:
+        texto = "".join(r.text for r in parrafo.runs)
+        variables.update(patron_var.findall(texto))
+    for tabla in doc.tables:
+        for fila in tabla.rows:
+            for celda in fila.cells:
+                for parrafo in celda.paragraphs:
+                    texto = "".join(r.text for r in parrafo.runs)
+                    variables.update(patron_var.findall(texto))
 
     output = io.BytesIO()
     doc.save(output)
     output.seek(0)
-    return output, list(contadores.keys())
+    return output, sorted(variables)

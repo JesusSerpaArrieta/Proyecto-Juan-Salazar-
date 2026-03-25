@@ -4,6 +4,7 @@ import DashboardPage from "./pages/DashboardPage";
 import CategoriaPage from "./pages/CategoriaPage";
 import NuevaCategoriaPage from "./pages/NuevaCategoriaPage";
 import NuevaPlantillaPage from "./pages/NuevaPlantillaPage";
+import ConversorPage from "./pages/ConversorPage";
 import LoginPage from "./pages/LoginPage";
 import RegisterPage from "./pages/RegisterPage";
 import ProtectedRoute from "./components/ProtectedRoute";
@@ -50,6 +51,14 @@ function App() {
           element={
             <ProtectedRoute>
               <NuevaPlantillaPage />
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/conversor"
+          element={
+            <ProtectedRoute>
+              <ConversorPage />
             </ProtectedRoute>
           }
         />
