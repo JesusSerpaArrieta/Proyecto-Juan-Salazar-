@@ -47,7 +47,8 @@ export default function Navbar() {
             ...(isLogged ? [
               { to: "/nueva-categoria", label: "Nueva categoría" },
               { to: "/nueva-plantilla", label: "Subir plantilla" },
-              { to: "/conversor", label: "Conversor" },
+              // TODO: habilitar conversor cuando esté listo
+              // { to: "/conversor", label: "Conversor" },
             ] : []),
           ].map(({ to, label }) => (
             <Link key={to} to={to}
